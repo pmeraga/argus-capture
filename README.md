@@ -96,5 +96,3 @@ Synthetic assets were generated with the authored `scripts/generate-demo.py` usi
 ```sh
 python scripts/generate-demo.py
 ```
-
-No actual Argus recordings are bundled. See `DEMO_SCRIPT.md` for a suggested 3–5 minute recording and final submission checklist.
