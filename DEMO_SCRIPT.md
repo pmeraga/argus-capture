@@ -8,7 +8,7 @@ Use the real assignment samples for the recorded upload. The built-in synthetic 
 - Run type checking, synchronization tests, API integration tests, and build.
 - Download the provided ego, left wrist, and right wrist sample recordings.
 - Upload them in the target browser. Check decoding, duration, dimensions, and seeking.
-- Find a shared event, record each camera timestamp, and calculate wrist offsets. Do not infer synchronization from filenames.
+- Confirm the viewer reports an automatic audio match and shows the saved wrist offsets.
 - Verify the same event stays aligned near the start, middle, and end after repeated seeks.
 - Verify the hosted URL is accessible to the intended reviewer. The current deployment is private; change sharing explicitly if required.
 - Record in a clean workspace. If upload time is long, edit out the wait while keeping the upload process and success visible.
@@ -23,7 +23,7 @@ Show the library and create a new episode.
 Name the episode, assign the real sample recordings to their explicit slots, and show extracted metadata. Explain that all three are required and uploads use 8 MiB chunks. Show progress and the completed episode.
 
 **1:30–2:45 — Three-camera review**
-Play, pause, seek, restart, and change speed across all streams. Open calibration, explain the shared-event timestamps, and apply the measured wrist offsets. Show the event aligned across the three views. Refresh to demonstrate saved association and calibration.
+Play, pause, seek, restart, and change speed across all streams. Show the automatically detected wrist offsets and the event aligned across all three views. Refresh to demonstrate that the alignment and camera assignments were saved.
 
 **2:45–3:30 — Metadata and persistence**
 Show filename, duration, dimensions, container, common interval, and metadata export. Explain that originals live in R2 and episode records in D1. Clarify that metadata is read in the browser; server codec/frame-rate probing is a next step.

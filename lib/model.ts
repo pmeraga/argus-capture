@@ -2,7 +2,13 @@ export const roles = ['ego', 'left', 'right'] as const;
 export type Role = typeof roles[number];
 export const labels: Record<Role,string> = {ego:'Egocentric',left:'Left wrist',right:'Right wrist'};
 export type Camera = {role:Role; filename:string; size:number; duration:number; width:number; height:number; mime:string; offset:number; key?:string; uploadId?:string; uploaded?:boolean};
-export type Episode = {id:string; name:string; createdAt:string; status:string; cameras:Camera[]; description?:string; demo?:boolean};
+export const alignmentFailureReasons = ['missing-audio', 'weak-match', 'decode-failed', 'no-overlap'] as const;
+export type AlignmentFailure = typeof alignmentFailureReasons[number];
+export type Alignment =
+ | {method:'audio'; scores:Record<Exclude<Role,'ego'>,number>}
+ | {method:'unverified'; reason:AlignmentFailure}
+ | {method:'manual'};
+export type Episode = {id:string; name:string; createdAt:string; status:string; cameras:Camera[]; description?:string; demo?:boolean; alignment?:Alignment};
 export function overlap(cameras:Pick<Camera,'duration'|'offset'>[]) {
  const start = Math.max(0,...cameras.map(c=>-c.offset));
  const end = Math.min(...cameras.map(c=>c.duration-c.offset));

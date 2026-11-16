@@ -1,6 +1,6 @@
 # Argus Capture
 
-A working three-camera robotics collection platform: create episodes, upload ego and wrist recordings, inspect metadata, and play the three perspectives on a shared calibrated timeline.
+A working three-camera robotics collection platform: create episodes, upload ego and wrist recordings, inspect metadata, and play the three perspectives on a shared timeline.
 
 ## Features
 
@@ -9,7 +9,7 @@ A working three-camera robotics collection platform: create episodes, upload ego
 - Browser-readable video metadata: original filename, size, duration, resolution, and container/MIME type.
 - Durable D1 episode records and R2 original video objects; no video data in localStorage.
 - 8 MiB multipart uploads, per-part retries, progress, cancellation, and cleanup after failed uploads.
-- Shared play, pause, seek, restart, speed controls, manual persisted wrist offsets, drift correction, and common-overlap playback.
+- Shared play, pause, seek, restart, speed controls, automatic audio alignment, persisted wrist offsets, playback drift correction, and common-overlap playback.
 - Byte-range video delivery for efficient seeking. Metadata JSON export.
 - Keyboard controls (space, left/right arrows), responsive layouts, and an in-app calibration guide.
 - A clearly labeled synthetic 12-second robotics demo with three generated camera perspectives. These are **not** the assignment sample recordings.
@@ -20,7 +20,7 @@ React 19 + TypeScript, Vinext/Vite, a Cloudflare Worker API, D1 (SQLite), R2, Dr
 
 `app/page.tsx` contains the collection UI and shared playback coordinator. `app/api/[...path]/route.ts` owns episode and upload APIs. `lib/model.ts` defines camera roles, metadata, and overlap calculations. `db/schema.ts` and `drizzle/` define the persistent schema. `public/demo/` contains bundled synthetic assets.
 
-The implementation uses Worker-compatible storage rather than a Python/FFmpeg runtime so the full app can run on hosted Sites. Metadata is read in the browser before uploading. No codec conversion or server media probe runs in production.
+The implementation uses Worker-compatible storage rather than a Python/FFmpeg runtime so the full app can run on hosted Sites. The browser reads video metadata and runs audio alignment in a dedicated worker before uploading. The app stores the original files and persists the alignment decision when all uploads finish.
 
 ## Reproduce locally
 
@@ -49,25 +49,57 @@ node tests/api.integration.mjs
 corepack pnpm build
 ```
 
-The API integration test uses an isolated Miniflare runtime with real D1/R2 emulation. It checks duplicate camera roles, episode and owner isolation, incomplete finalization, chunk validation, multi-part assembly across an 8 MiB boundary, byte-range delivery, offset persistence and invalid overlap, cross-origin write rejection, and object cleanup. Its database and bucket are discarded afterward.
+The API integration test uses an isolated Miniflare runtime with real D1/R2 emulation. It checks duplicate camera roles, episode and owner isolation, incomplete finalization, chunk validation, multi-part assembly across an 8 MiB boundary, byte-range delivery, automatic and manual offset persistence, finalization retries, and invalid overlap, cross-origin write rejection, and object cleanup. Its database and bucket are discarded afterward.
 
-The five synchronization tests check aligned and unequal durations, positive and negative offsets, nonoverlapping recordings, and valid camera timestamps throughout the shared interval.
-
-Type checking, the production build, synchronization tests, and API integration tests passed during implementation. Browser QA could not run in the authoring environment because its managed preview service was unavailable. Actual Argus sample validation and the final recorded walkthrough remain submission checks; the included synthetic episode is not evidence of sample alignment.
+The synchronization tests cover overlap calculations, recovery of positive and negative audio offsets, and rejection of silent and ambiguous matches.
 
 ## Upload and playback
 
 1. Choose **New episode**, name the episode, and assign one original video to each camera slot.
 2. Supported inputs are browser-playable MP4, WebM, and MOV, up to 5 GiB per recording. H.264 MP4 is the most portable choice. MOV is only accepted if the current browser can decode it.
-3. Keep the tab open during collection. Each file is split into 8 MiB R2 parts and uploaded sequentially. Failed parts retry up to three times. The episode becomes ready only after all three objects finish.
-4. Find the same visual event in ego and wrist videos. In **Calibrate offsets**, set each wrist offset to `wrist_event_time - ego_event_time`. Ego is fixed at zero.
-5. Review with shared controls. Export metadata to preserve the calibration alongside the original recording metadata.
+3. Select **Create episode**. The app compares audio events with the egocentric recording, then uploads the originals in 8 MiB parts. Keep the tab open through both stages.
+4. Review the shared interval. The episode displays **Automatic · Audio match** after successful alignment or **Needs review** when the match could not be verified. **Adjust offsets** is available for exceptions. Export metadata to retrieve the applied offsets and alignment decision.
 
 `camera_time = episode_time + camera_offset`
 
 The common episode interval is `max(0, -offsets)` through `min(duration - offset)`. The visible timeline starts at zero relative to that interval. The episode info panel exposes its actual ego interval. Example: ego event at 5 s and wrist event at 7 s means a wrist offset of +2 s. Empty shared intervals are rejected.
 
 The coordinator uses a monotonic shared clock and corrects stream drift above 120 ms. Buffering pauses all streams and prompts for manual resume. All streams are muted for consistent autoplay behavior. This is approximate browser synchronization, not frame-accurate or hardware-timestamp synchronization.
+
+## Automatic alignment
+
+The estimator compares audio onsets across five frequency bands at 10 ms intervals. It searches for a distinct correlation peak and checks that the offset agrees across separate portions of the recording. It uses elapsed audio presentation timestamps, so inconsistent device clocks and file creation dates do not affect the estimate. Both wrist tracks must match ego before the app applies either offset.
+
+The headless command uses the same estimator with FFmpeg for audio decoding. It prints a JSON result and exits with status 1 for recordings that need review. A successful result can be passed directly to `POST /api/episodes/{id}/finalize` after the three files have been uploaded.
+
+```sh
+node --experimental-strip-types scripts/sync-episode.mjs ego.mp4 left.mp4 right.mp4
+```
+
+FFmpeg must be on PATH. Set `FFMPEG` to use a specific executable.
+
+### Argus sample results
+
+The original sample filenames do not encode wrist side in a verified way, so the table identifies each wrist recording by its filename suffix. A positive value means the event is later on the wrist clip's local timeline.
+
+| Egocentric recording | First wrist offset | Second wrist offset | Shared playback |
+| --- | --- | --- | ---: |
+| `GX010008.MP4` | `013` +1.68 s | `010` +1.35 s | 117.07 s |
+| `GX010009.MP4` | `014` +2.99 s | `011` +2.45 s | 174.69 s |
+
+These measurements establish alignment within each recorded trio. A cross-trio test returned `weak-match`. The archive can describe one continuous run even when the three cameras stop and restart around the same time. A failed match does not establish where the second trio starts on the first trio’s clock.
+
+## Handoff for Argus
+
+1. Extract the sample ZIP locally. Group the clips using the two rows above. Confirm left and right assignments against the capture manifest or camera labels.
+2. Follow **Reproduce locally** and run `corepack pnpm start` to review the production build on localhost. Create one episode per trio and select the three extracted files. The browser matches the audio, uploads to the local emulator, and opens the synchronized viewer.
+3. Use the shared scrubber to review each span. The viewer shows the offset on each camera and exports it with the shared interval in the episode metadata. For automated processing, run the headless command for each trio and retain its JSON alongside the originals.
+
+The current player handles three streams per episode and accepts extracted video files. Showing all six clips on a continuous run timeline requires a known start time for the second trio relative to the first. Use capture logs, a common timecode, or an independently recorded track that overlaps both spans. With that anchor, place the clips on one run timeline and display each stream only where it has footage. If the anchor is unavailable, keep the segment offsets relative to their own egocentric recordings and leave the gap unknown.
+
+For unattended ingestion, run the headless estimator in a background worker after an archive lands in private object storage. Record a versioned manifest with clip identities, offsets, match scores, and review status. Use an idempotent job key so retries preserve one result per archive. Expose playback through authenticated, range-enabled media URLs. Verify the service and storage bindings before offering a hosted link to reviewers.
+
+If a track has no usable audio, this version flags the match for review. A production fallback can use synchronized capture timestamps or hardware timecode. When a shared visual event is visible across views, its frame times provide another anchor. Over a long run, compare multiple anchors to estimate clock drift as well as a start offset.
 
 ## Access and data handling
 
@@ -77,15 +109,13 @@ Object keys use generated episode IDs and explicit roles, never user-supplied fi
 
 ## Known limits and next steps
 
-- No automatic timestamp/audio/visual alignment; offsets require manual calibration.
+- Automatic alignment needs decodable shared audio within the first five minutes of each recording. It estimates a constant offset. Silent clips, ambiguous matches, and inconsistent offsets are flagged for review.
 - Frame rate, codec details, audio metadata, and corrupt-file validation need a trusted asynchronous media probe. Browser duration/dimensions are not equivalent to FFprobe output.
 - No transcoding, frame stepping, signed direct-to-object-store uploads, or per-frame seek guarantees.
 - No concurrent-edit conflict handling, background upload recovery, scheduled orphan cleanup, or per-user quotas beyond per-file limits.
 - The library returns the latest 500 episodes; add cursor pagination before production-scale collections.
 - An upload is marked ready after all three objects are stored; browser metadata is not independently verified against the media contents on the server.
 - Private hosting has been selected. Reviewer access requires an explicit sharing change by the owner.
-
-Prioritize real sample alignment/codec checks, browser QA, a server media-processing queue, and recoverable uploads before expanding features.
 
 ## AI and third-party tools
 

@@ -23,14 +23,22 @@ try{
   x=await call(`/${ep.id}/upload/${role}/part?number=1`,'PUT',new Uint8Array(32).fill(20+i));assert.equal(x.r.status,200);const part=await x.data();
   x=await call(`/${ep.id}/upload/${role}/complete`,'POST',{parts:[part]});assert.equal(x.r.status,200);
  }
- x=await call('/'+ep.id+'/finalize','POST');assert.equal(x.r.status,200);
+ const alignment={method:'audio',scores:{left:.38,right:.42}};
+ x=await call('/'+ep.id+'/finalize','POST',{alignment,offsets:{ego:0,left:100,right:0}});
+ assert.equal(x.r.status,400,'automatic offsets must leave common overlap');
+ x=await call('/'+ep.id+'/finalize','POST',{alignment,offsets:{ego:0,left:-1.26,right:2.41}});
+ assert.equal(x.r.status,200);
  x=await call('/'+ep.id);const saved=await x.data();assert.equal(saved.status,'ready');assert.ok(saved.cameras.every(c=>c.uploaded));
+ assert.deepEqual(saved.alignment,alignment);
+ assert.deepEqual(saved.cameras.map(c=>c.offset),[0,-1.26,2.41]);
  x=await call('/'+ep2.id);assert.equal((await x.data()).status,'uploading','second episode is untouched');
  x=await call(`/${ep.id}/video/left`,'GET',undefined,'test-owner',{'Range':'bytes=5-9'});assert.equal(x.r.status,206);assert.equal(x.r.headers.get('Content-Range'),'bytes 5-9/32');assert.deepEqual([...new Uint8Array(await x.r.arrayBuffer())],[21,21,21,21,21]);
  x=await call(`/${ep.id}/video/right`,'GET',undefined,'test-owner',{'Range':'bytes=-3'});assert.equal(x.r.status,206);assert.equal((await x.r.arrayBuffer()).byteLength,3);
  x=await call(`/${ep.id}/video/ego`,'GET',undefined,'test-owner',{'Range':'bytes=100-'});assert.equal(x.r.status,416);
  x=await call('/'+ep.id,'PATCH',{offsets:[{role:'ego',offset:0},{role:'left',offset:-1},{role:'right',offset:2}]});assert.equal(x.r.status,200);
- x=await call('/'+ep.id);assert.equal((await x.data()).cameras.find(c=>c.role==='left').offset,-1);
+ x=await call('/'+ep.id+'/finalize','POST',{alignment,offsets:{ego:0,left:1,right:2}});assert.equal(x.r.status,200);
+ x=await call('/'+ep.id);const adjusted=await x.data();assert.equal(adjusted.cameras.find(c=>c.role==='left').offset,-1);
+ assert.deepEqual(adjusted.alignment,{method:'manual'},'late finalize retry preserves manual override');
  x=await call('/'+ep.id,'PATCH',{offsets:[{role:'ego',offset:0},{role:'left',offset:100},{role:'right',offset:0}]});assert.equal(x.r.status,400,'reject empty overlap');
  x=await call('/'+ep.id,'DELETE',undefined,'test-owner',{'Origin':'https://evil.test'});assert.equal(x.r.status,403);
  x=await call('/'+ep.id,'DELETE');assert.equal(x.r.status,200);

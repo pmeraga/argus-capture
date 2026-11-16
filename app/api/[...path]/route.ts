@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { roles, overlap, type Camera, type Episode, type Role } from '@/lib/model';
+import { alignmentFailureReasons, roles, overlap, type Alignment, type Camera, type Episode, type Role } from '@/lib/model';
 export const dynamic='force-dynamic';
 const json=(d:unknown,status=200)=>Response.json(d,{status,headers:{'Cache-Control':'no-store'}});
 const fail=(s:string,status=400)=>{throw Object.assign(new Error(s),{status});};
@@ -28,7 +28,8 @@ async function handle(req:Request,{params}:{params:Promise<{path:string[]}>}) {
   }
   const row=await db.prepare('SELECT * FROM episodes WHERE id=? AND owner=?').bind(id,owner).first<any>();
   if(!row)return json({error:'Episode not found'},404);
-  const data=JSON.parse(row.data); const cameras:Camera[]=data.cameras;
+  const data=JSON.parse(row.data) as Pick<Episode,'cameras'|'description'|'alignment'>;
+  const cameras=data.cameras;
   const save=async(status=row.status)=>db.prepare('UPDATE episodes SET data=?,status=? WHERE id=? AND owner=?').bind(JSON.stringify(data),status,id,owner).run();
   if(!action&&req.method==='GET')return json({id,name:row.name,createdAt:row.created_at,status:row.status,...data});
   if(!action&&req.method==='DELETE'){
@@ -37,14 +38,39 @@ async function handle(req:Request,{params}:{params:Promise<{path:string[]}>}) {
   }
   if(!action&&req.method==='PATCH'){
    const b=await req.json() as any;
-   if(!Array.isArray(b.offsets)||b.offsets.length!==3||!roles.every(r=>b.offsets.filter((o:any)=>o.role===r).length===1))fail('Three camera offsets are required.');
+   if(row.status!=='ready')fail('Finish the episode before changing its offsets.');
+   if(!Array.isArray(b?.offsets)||b.offsets.length!==3||!roles.every(r=>b.offsets.filter((o:any)=>o?.role===r).length===1))fail('Three camera offsets are required.');
    for(const c of cameras){const o=b.offsets.find((o:any)=>o.role===c.role);if(!Number.isFinite(o.offset)||Math.abs(o.offset)>86400)fail('Invalid offset.');c.offset=o.offset;}
    if(cameras.find(c=>c.role==='ego')?.offset!==0)fail('Egocentric offset must remain zero.');
    if(overlap(cameras).duration<=0)fail('These offsets leave no shared playback interval.');
+   data.alignment={method:'manual'};
    await save();return json({ok:true});
   }
   if(action==='finalize'&&req.method==='POST'){
-   if(!cameras.every(c=>c.uploaded))fail('All three camera uploads must finish first.');await save('ready');return json({ok:true});
+   if(row.status==='ready')return json({ok:true});
+   if(!cameras.every(c=>c.uploaded))fail('All three camera uploads must finish first.');
+   const body=await req.text();
+   if(body){
+    let result:any;
+    try { result=JSON.parse(body); } catch { fail('Invalid synchronization result.'); }
+    const alignment=result?.alignment;
+    if(alignment?.method==='audio'){
+     const offsets=result.offsets;
+     if(offsets?.ego!==0||!roles.every(r=>Number.isFinite(offsets?.[r])&&Math.abs(offsets[r])<=86400))fail('Invalid synchronization offsets.');
+     const {left,right}=alignment.scores??{};
+     if(![left,right].every(score=>Number.isFinite(score)&&score>=0&&score<=1))fail('Invalid synchronization scores.');
+     for(const camera of cameras)camera.offset=offsets[camera.role];
+     if(overlap(cameras).duration<=0)fail('These offsets leave no shared playback interval.');
+     data.alignment={method:'audio',scores:{left,right}};
+    }else if(alignment?.method==='unverified'&&alignmentFailureReasons.includes(alignment.reason)&&result.offsets===undefined){
+     data.alignment={method:'unverified',reason:alignment.reason} satisfies Alignment;
+    }else{
+     fail('Invalid synchronization result.');
+    }
+   }
+   await db.prepare("UPDATE episodes SET data=?,status='ready' WHERE id=? AND owner=? AND status='uploading'")
+    .bind(JSON.stringify(data),id,owner).run();
+   return json({ok:true});
   }
   if(action==='video'&&req.method==='GET'){
    const c=cameras.find(c=>c.role===role);if(!c?.key||!c.uploaded)return json({error:'Video not found'},404);
