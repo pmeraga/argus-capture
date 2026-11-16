@@ -101,6 +101,41 @@ For unattended ingestion, run the headless estimator in a background worker afte
 
 If a track has no usable audio, this version flags the match for review. A production fallback can use synchronized capture timestamps or hardware timecode. When a shared visual event is visible across views, its frame times provide another anchor. Over a long run, compare multiple anchors to estimate clock drift as well as a start offset.
 
+## Experimental visual alignment
+
+The visual experiment estimates a time shift from motion around the packet and hands. It runs on extracted videos with FFmpeg and OpenCV, without an audio track or a trained model.
+
+1. FFmpeg streams grayscale frames at 6 fps. OpenCV’s Farnebäck optical flow estimates pixel displacement between consecutive frames. Each camera has its own fixed crop so the wrist and ego views can focus on the same work area despite differences in framing. Crop coordinates are fractions of image width and height in `x,y,width,height` order.
+2. The script measures the 90th percentile of motion in each crop, once with raw flow and once after subtracting the median flow across the image. The second trace reduces the effect of overall image translation. A log transform compresses large spikes and short smoothing reduces frame-to-frame noise.
+3. For each wrist, the script shifts its two motion traces against ego and averages their normalized correlations. All candidate shifts use the same ego interval. The default search is ±15 seconds, with steps of about 0.167 seconds. A positive offset means a shared action appears later on the wrist clip’s clock.
+4. The best shift qualifies as a candidate when it falls inside the search boundary, scores at least 0.30, and beats the best alternative more than one second away by at least 0.06. The script also scores three separate windows. At least two windows must score 0.25 or better, and every window that clears that threshold must agree with the overall shift within two sampled frames. These thresholds are experimental.
+
+With Python 3.11 and FFmpeg on PATH, run from the checkout root.
+
+```sh
+python3 -m venv work/visual-env
+. work/visual-env/bin/activate
+python -m pip install opencv-python-headless
+python scripts/sync-visual.py --ego-roi 0.28,0.40,0.44,0.52 \
+  --wrist-roi 0.16,0.32,0.68,0.58 --wrist-roi 0.16,0.32,0.68,0.58 \
+  "/path/to/organizing videos/GX010008.MP4" \
+  "/path/to/organizing videos/VID_20260724_160505_00_013.mp4" \
+  "/path/to/organizing videos/VID_20260724_160516_00_010.mp4"
+```
+
+Use the same command with the second trio’s filenames to reproduce its result. The JSON output includes the best shift, correlation, peak margin, and window estimates for each wrist. Exit status 0 means every pair met the candidate criteria. Status 1 means at least one pair needs review, and status 2 means the command could not analyze its inputs. The output is for offline review.
+
+The crop around the work area gave the following results. The audio estimates were used only to score the visual results after matching.
+
+| Wrist clip | Audio reference | Visual candidate | Absolute error | Visual decision |
+| --- | ---: | ---: | ---: | --- |
+| `013` | +1.68 s | +1.50 s | 0.18 s | Needs review |
+| `010` | +1.35 s | +1.17 s | 0.18 s | Needs review |
+| `014` | +2.99 s | +3.00 s | 0.01 s | Needs review |
+| `011` | +2.45 s | +2.33 s | 0.12 s | Needs review |
+
+The global peaks with these specific crops were within 0.19 seconds of the audio estimates. Independent windows disagreed, and the default crop gave a peak of −8.17 seconds for clip `011`, 10.62 seconds from its audio reference. These results are suitable for locating events for review. For a stronger experiment, track the packet per view and test local feature matching on moments where the same surface is visible in both views. A future browser version can move video decoding and motion extraction into a worker. The current visual command runs locally or in a background ingestion worker with FFmpeg and OpenCV.
+
 ## Access and data handling
 
 The hosted Site is owner-private. Requests are scoped to the dispatch-provided authenticated user ID. Local unsigned development uses a private-workspace fallback. Do not expose the Worker outside private hosting without adding an explicit authentication requirement for every API path; the fallback is for the current private/local context.
